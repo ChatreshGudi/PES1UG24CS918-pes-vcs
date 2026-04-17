@@ -173,20 +173,23 @@ static int compare_index_entries(const void *a, const void *b) {
 
 
 int index_save(const Index *index) {
-    // Sort a mutable copy before writing
-    Index sorted = *index;
-    qsort(sorted.entries, sorted.count, sizeof(IndexEntry), compare_index_entries);
+    // Use heap allocation — Index is ~5.6 MB, too large for the stack
+    // when called deep in the chain (cmd_add -> index_add -> index_save).
+    Index *sorted = malloc(sizeof(Index));
+    if (!sorted) return -1;
+    *sorted = *index;
+    qsort(sorted->entries, sorted->count, sizeof(IndexEntry), compare_index_entries);
 
     char tmp_path[] = ".pes/index.tmp.XXXXXX";
     int tmp_fd = mkstemp(tmp_path);
-    if (tmp_fd < 0) return -1;
+    if (tmp_fd < 0) { free(sorted); return -1; }
 
     FILE *f = fdopen(tmp_fd, "w");
-    if (!f) { close(tmp_fd); unlink(tmp_path); return -1; }
+    if (!f) { close(tmp_fd); unlink(tmp_path); free(sorted); return -1; }
 
     char hex[HASH_HEX_SIZE + 1];
-    for (int i = 0; i < sorted.count; i++) {
-        const IndexEntry *e = &sorted.entries[i];
+    for (int i = 0; i < sorted->count; i++) {
+        const IndexEntry *e = &sorted->entries[i];
         hash_to_hex(&e->hash, hex);
         fprintf(f, "%o %s %llu %u %s\n",
                 e->mode, hex,
@@ -198,6 +201,7 @@ int index_save(const Index *index) {
     fflush(f);
     fsync(fileno(f));
     fclose(f);
+    free(sorted);
 
     if (rename(tmp_path, INDEX_FILE) < 0) { unlink(tmp_path); return -1; }
     return 0;
