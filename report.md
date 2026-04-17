@@ -187,5 +187,3 @@ The repository is now **corrupt**: the commit object references a blob that no l
 The fundamental principle: **GC must only delete objects that have been unreachable for longer than the maximum possible duration of a concurrent write operation.**
 
 ---
-
-*Report generated for PES-VCS Lab — Operating Systems, PESU*
