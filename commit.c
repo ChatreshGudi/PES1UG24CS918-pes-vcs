@@ -225,8 +225,7 @@ int commit_create(const char *message, ObjectID *commit_id_out) {
     }
     free(data);
 
-    // TODO: read parent, fill commit struct, write object, update HEAD
-    (void)message; (void)commit_id_out;
-    return -1;
+    // Step 5: Update the branch pointer (HEAD) to the new commit
+    return head_update(commit_id_out);
 }
 
