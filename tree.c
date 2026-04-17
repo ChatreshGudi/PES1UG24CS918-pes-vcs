@@ -175,7 +175,31 @@ static int write_tree_level(const IndexEntry *entries, int count, ObjectID *id_o
             }
             int subcount = i - start;
 
-            /* TODO: build sub-array and recurse */
+            /* Strip the "dir/" prefix from each entry path for the recursive call */
+            IndexEntry *sub = malloc(subcount * sizeof(IndexEntry));
+            if (!sub) return -1;
+            for (int j = 0; j < subcount; j++) {
+                sub[j] = entries[start + j];
+                const char *rest = strchr(entries[start + j].path, '/') + 1;
+                strncpy(sub[j].path, rest, sizeof(sub[j].path) - 1);
+                sub[j].path[sizeof(sub[j].path) - 1] = '\0';
+            }
+
+            /* Recursively write the subtree */
+            ObjectID sub_id;
+            if (write_tree_level(sub, subcount, &sub_id) < 0) {
+                free(sub);
+                return -1;
+            }
+            free(sub);
+
+            /* Add a directory entry pointing to the subtree hash */
+            TreeEntry *te = &tree.entries[tree.count++];
+            te->mode = MODE_DIR;
+            te->hash = sub_id;
+            strncpy(te->name, dir_name, sizeof(te->name) - 1);
+            te->name[sizeof(te->name) - 1] = '\0';
+
             (void)subcount;
         }
 
