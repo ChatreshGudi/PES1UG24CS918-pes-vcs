@@ -156,9 +156,29 @@ static int write_tree_level(const IndexEntry *entries, int count, ObjectID *id_o
             te->name[sizeof(te->name) - 1] = '\0';
             i++;
         } else {
-            /* TODO: handle directory entries */
-            i++;
+            /* Extract the top-level directory name (before the first '/') */
+            size_t dir_len = slash - path;
+            char dir_name[256];
+            if (dir_len >= sizeof(dir_name)) return -1;
+            memcpy(dir_name, path, dir_len);
+            dir_name[dir_len] = '\0';
+
+            /* Count consecutive entries that share this same prefix */
+            int start = i;
+            while (i < count) {
+                const char *p = entries[i].path;
+                const char *sl = strchr(p, '/');
+                if (!sl) break;
+                size_t dl = sl - p;
+                if (dl != dir_len || strncmp(p, dir_name, dir_len) != 0) break;
+                i++;
+            }
+            int subcount = i - start;
+
+            /* TODO: build sub-array and recurse */
+            (void)subcount;
         }
+
     }
 
     (void)id_out;
