@@ -57,16 +57,25 @@ int object_exists(const ObjectID *id) {
     return access(path, F_OK) == 0;
 }
 
-// ─── TODO: Implement these ──────────────────────────────────────────────────
+// ─── object_write ────────────────────────────────────────────────────────────
 
+// Resolve the ObjectType enum to its string representation ("blob", "tree", "commit").
+// Returns -1 for unknown types.
 int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
-    // TODO: Implement
-    (void)type; (void)data; (void)len; (void)id_out;
+    const char *type_str = "";
+    if (type == OBJ_BLOB)        type_str = "blob";
+    else if (type == OBJ_TREE)   type_str = "tree";
+    else if (type == OBJ_COMMIT) type_str = "commit";
+    else return -1;
+
+    // TODO: build header, compute hash, write to disk
+    (void)data; (void)len; (void)id_out;
+    (void)type_str;
     return -1;
 }
 
+// object_read — TODO
 int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_t *len_out) {
-    // TODO: Implement
     (void)id; (void)type_out; (void)data_out; (void)len_out;
     return -1;
 }
