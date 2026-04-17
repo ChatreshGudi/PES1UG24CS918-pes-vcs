@@ -59,8 +59,8 @@ int object_exists(const ObjectID *id) {
 
 // ─── object_write ────────────────────────────────────────────────────────────
 
-// Resolve the ObjectType enum to its string representation ("blob", "tree", "commit").
-// Returns -1 for unknown types.
+// Constructs the full object buffer (header + data), computes its SHA-256
+// hash, and returns early if the object already exists (deduplication).
 int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
     const char *type_str = "";
     if (type == OBJ_BLOB)        type_str = "blob";
@@ -68,9 +68,31 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
     else if (type == OBJ_COMMIT) type_str = "commit";
     else return -1;
 
-    // TODO: build header, compute hash, write to disk
-    (void)data; (void)len; (void)id_out;
-    (void)type_str;
+    // Build header: "<type> <size>\0"
+    char header[64];
+    int header_len = snprintf(header, sizeof(header), "%s %zu", type_str, len);
+    if (header_len < 0 || header_len >= (int)sizeof(header)) return -1;
+    header_len += 1; // include the '\0' terminator
+
+    // Allocate and fill the full object buffer
+    size_t full_len = header_len + len;
+    void *full_data = malloc(full_len);
+    if (!full_data) return -1;
+    memcpy(full_data, header, header_len);
+    if (data && len > 0)
+        memcpy((char *)full_data + header_len, data, len);
+
+    // Compute SHA-256 of the full object
+    compute_hash(full_data, full_len, id_out);
+
+    // Deduplication: if already stored, nothing to do
+    if (object_exists(id_out)) {
+        free(full_data);
+        return 0;
+    }
+
+    // TODO: write full_data to disk atomically
+    free(full_data);
     return -1;
 }
 
