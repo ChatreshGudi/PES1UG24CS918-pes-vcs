@@ -205,6 +205,17 @@ int commit_create(const char *message, ObjectID *commit_id_out) {
     ObjectID parent_id;
     int has_parent = (head_read(&parent_id) == 0) ? 1 : 0;
 
+    // Step 3: Populate the Commit struct
+    Commit commit;
+    commit.tree = tree_id;
+    commit.has_parent = has_parent;
+    if (has_parent) commit.parent = parent_id;
+
+    snprintf(commit.author, sizeof(commit.author), "%s", pes_author());
+    commit.timestamp = (uint64_t)time(NULL);
+    snprintf(commit.message, sizeof(commit.message), "%s", message);
+
+
     // TODO: read parent, fill commit struct, write object, update HEAD
     (void)message; (void)commit_id_out;
     return -1;
