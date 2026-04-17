@@ -58,9 +58,9 @@ int object_exists(const ObjectID *id) {
 }
 
 // ─── object_write ────────────────────────────────────────────────────────────
+// Stores data atomically via temp-file + rename to guarantee crash-safety.
+// Uses fsync() on both the file and its parent directory.
 
-// Constructs the full object buffer (header + data), computes its SHA-256
-// hash, and returns early if the object already exists (deduplication).
 int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
     const char *type_str = "";
     if (type == OBJ_BLOB)        type_str = "blob";
@@ -68,13 +68,11 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
     else if (type == OBJ_COMMIT) type_str = "commit";
     else return -1;
 
-    // Build header: "<type> <size>\0"
     char header[64];
     int header_len = snprintf(header, sizeof(header), "%s %zu", type_str, len);
     if (header_len < 0 || header_len >= (int)sizeof(header)) return -1;
-    header_len += 1; // include the '\0' terminator
+    header_len += 1;
 
-    // Allocate and fill the full object buffer
     size_t full_len = header_len + len;
     void *full_data = malloc(full_len);
     if (!full_data) return -1;
@@ -82,18 +80,47 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
     if (data && len > 0)
         memcpy((char *)full_data + header_len, data, len);
 
-    // Compute SHA-256 of the full object
     compute_hash(full_data, full_len, id_out);
 
-    // Deduplication: if already stored, nothing to do
     if (object_exists(id_out)) {
         free(full_data);
         return 0;
     }
 
-    // TODO: write full_data to disk atomically
+    // Determine final path and shard directory
+    char path[512];
+    object_path(id_out, path, sizeof(path));
+
+    char shard_dir[512];
+    snprintf(shard_dir, sizeof(shard_dir), "%s", path);
+    char *last_slash = strrchr(shard_dir, '/');
+    if (last_slash) *last_slash = '\0';
+    mkdir(shard_dir, 0755);
+
+    // Write to a temp file in the shard dir, then atomically rename
+    char tmp_path[1024];
+    snprintf(tmp_path, sizeof(tmp_path), "%s/tmp_XXXXXX", shard_dir);
+    int tmp_fd = mkstemp(tmp_path);
+    if (tmp_fd < 0) { free(full_data); return -1; }
+
+    ssize_t written = write(tmp_fd, full_data, full_len);
+    if (written != (ssize_t)full_len) {
+        close(tmp_fd); unlink(tmp_path); free(full_data); return -1;
+    }
+
+    fsync(tmp_fd);
+    close(tmp_fd);
+
+    if (rename(tmp_path, path) < 0) {
+        unlink(tmp_path); free(full_data); return -1;
+    }
+
+    // fsync the shard directory to persist the rename
+    int dir_fd = open(shard_dir, O_RDONLY);
+    if (dir_fd >= 0) { fsync(dir_fd); close(dir_fd); }
+
     free(full_data);
-    return -1;
+    return 0;
 }
 
 // object_read — TODO
