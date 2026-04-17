@@ -15,14 +15,6 @@
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
-#include "index.h"
-
-/* Recursive helper — to be filled in incrementally */
-static int write_tree_level(const IndexEntry *entries, int count, ObjectID *id_out) {
-    (void)entries; (void)count; (void)id_out;
-    return -1;
-}
-
 
 // ─── Mode Constants ─────────────────────────────────────────────────────────
 
@@ -122,22 +114,27 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
     return 0;
 }
 
-// ─── TODO: Implement these ──────────────────────────────────────────────────
+// ─── tree_from_index implementation ─────────────────────────────────────────
 
-// Build a tree hierarchy from the current index and write all tree
-// objects to the object store.
-//
-// HINTS - Useful functions and concepts for this phase:
-//   - index_load      : load the staged files into memory
-//   - strchr          : find the first '/' in a path to separate directories from files
-//   - strncmp         : compare prefixes to group files belonging to the same subdirectory
-//   - Recursion       : you will likely want to create a recursive helper function 
-//                       (e.g., `write_tree_level(entries, count, depth)`) to handle nested dirs.
-//   - tree_serialize  : convert your populated Tree struct into a binary buffer
-//   - object_write    : save that binary buffer to the store as OBJ_TREE
-//
-// Returns 0 on success, -1 on error.
+#include "index.h"
 
+// Forward declaration: object_write lives in object.c
+int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out);
+
+// Weak stub for index_load: lets test_tree link without index.o.
+// When the full pes binary is linked (with index.o), the real index_load
+// from index.c overrides this weak symbol automatically.
+__attribute__((weak)) int index_load(Index *index) {
+    (void)index;
+    return -1;
+}
+
+// Recursive helper: build a tree for entries[0..count-1] where each path
+// has already had its leading `depth` components stripped, i.e. the strings
+// have the form "name" (file at this level) or "dir/..." (entry in a subdir).
+//
+// Writes the resulting tree object to the object store and stores its hash
+// in *id_out.  Returns 0 on success, -1 on error.
 static int write_tree_level(const IndexEntry *entries, int count, ObjectID *id_out) {
     Tree tree;
     tree.count = 0;
@@ -148,44 +145,49 @@ static int write_tree_level(const IndexEntry *entries, int count, ObjectID *id_o
         const char *slash = strchr(path, '/');
 
         if (!slash) {
-            /* File at this level — add directly as a blob entry */
+            // ── File entry at this level ─────────────────────────────────
             TreeEntry *te = &tree.entries[tree.count++];
             te->mode = entries[i].mode;
             te->hash = entries[i].hash;
-            strncpy(te->name, path, sizeof(te->name) - 1);
-            te->name[sizeof(te->name) - 1] = '\0';
+            size_t plen = strlen(path);
+            if (plen >= sizeof(te->name)) plen = sizeof(te->name) - 1;
+            memcpy(te->name, path, plen);
+            te->name[plen] = '\0';
             i++;
         } else {
-            /* Extract the top-level directory name (before the first '/') */
+            // ── Directory entry: gather all entries sharing the same prefix
             size_t dir_len = slash - path;
             char dir_name[256];
             if (dir_len >= sizeof(dir_name)) return -1;
             memcpy(dir_name, path, dir_len);
             dir_name[dir_len] = '\0';
 
-            /* Count consecutive entries that share this same prefix */
+            // Count consecutive entries with the same top-level dir
             int start = i;
             while (i < count) {
                 const char *p = entries[i].path;
                 const char *sl = strchr(p, '/');
-                if (!sl) break;
+                if (!sl) break; // file at this level — different group
                 size_t dl = sl - p;
                 if (dl != dir_len || strncmp(p, dir_name, dir_len) != 0) break;
                 i++;
             }
             int subcount = i - start;
 
-            /* Strip the "dir/" prefix from each entry path for the recursive call */
+            // Build a sub-array with the leading "dir/" stripped from paths
             IndexEntry *sub = malloc(subcount * sizeof(IndexEntry));
             if (!sub) return -1;
             for (int j = 0; j < subcount; j++) {
                 sub[j] = entries[start + j];
+                // Advance path pointer past "dir/"
                 const char *rest = strchr(entries[start + j].path, '/') + 1;
-                strncpy(sub[j].path, rest, sizeof(sub[j].path) - 1);
-                sub[j].path[sizeof(sub[j].path) - 1] = '\0';
+                size_t rlen = strlen(rest);
+                if (rlen >= sizeof(sub[j].path)) rlen = sizeof(sub[j].path) - 1;
+                memcpy(sub[j].path, rest, rlen);
+                sub[j].path[rlen] = '\0';
             }
 
-            /* Recursively write the subtree */
+            // Recursively write the subtree
             ObjectID sub_id;
             if (write_tree_level(sub, subcount, &sub_id) < 0) {
                 free(sub);
@@ -193,27 +195,34 @@ static int write_tree_level(const IndexEntry *entries, int count, ObjectID *id_o
             }
             free(sub);
 
-            /* Add a directory entry pointing to the subtree hash */
+            // Add a directory entry pointing to the subtree
             TreeEntry *te = &tree.entries[tree.count++];
             te->mode = MODE_DIR;
             te->hash = sub_id;
-            strncpy(te->name, dir_name, sizeof(te->name) - 1);
-            te->name[sizeof(te->name) - 1] = '\0';
-
-            (void)subcount;
+            size_t dlen = strlen(dir_name);
+            if (dlen >= sizeof(te->name)) dlen = sizeof(te->name) - 1;
+            memcpy(te->name, dir_name, dlen);
+            te->name[dlen] = '\0';
         }
-
     }
 
-    (void)id_out;
-    return -1; /* serialize step comes later */
+    // Serialize and write this tree to the object store
+    void *data;
+    size_t len;
+    if (tree_serialize(&tree, &data, &len) < 0) return -1;
+
+    int ret = object_write(OBJ_TREE, data, len, id_out);
+    free(data);
+    return ret;
 }
 
-
+// Build a tree hierarchy from the current index and write all tree
+// objects to the object store.
+// Returns 0 on success, -1 on error.
 int tree_from_index(ObjectID *id_out) {
     Index index;
     if (index_load(&index) < 0) return -1;
-    if (index.count == 0) return -1;
+    if (index.count == 0) return -1; // nothing staged
+
     return write_tree_level(index.entries, index.count, id_out);
 }
-
